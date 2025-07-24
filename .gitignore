@@ -17,13 +17,16 @@
 # Go workspace file
 go.work
 
-# Build artifacts
-langid
+# Build artifacts and executables
 langid.exe
 langid-linux
 langid-macos
 langid-windows
 langid/langid
+langid-executable
+
+# Generated files
+*.gen.go
 
 # IDE and editor files
 .vscode/

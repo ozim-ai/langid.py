@@ -108,7 +108,7 @@ func main() {
 	}
 
 	// Execute template
-	outputFile := "langid/embedded_model.go"
+	outputFile := "langid/embedded_model.gen.go"
 	file, err := os.Create(outputFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)

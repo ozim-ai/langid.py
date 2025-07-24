@@ -33,6 +33,7 @@ or implied, of the copyright holder.
 """
 from __future__ import print_function
 from typing import List, Tuple, Optional, Union, Dict, Any
+import array
 
 NORM_PROBS = False # Normalize output probabilities.
 
@@ -61,7 +62,7 @@ QlpoOTFBWSZTWRcOrWEAUJJfgGAQAMN/4AEACAApBFAgYrArPvbgSFAUAggISl20UoDQ1RECEoRSKE61
 """
 
 # Convenience methods defined below will initialize this when first called.
-identifier: 'LanguageIdentifier' | None = None
+identifier: Optional['LanguageIdentifier'] = None
 
 def set_languages(langs: Optional[List[str]] = None) -> 'LanguageIdentifier':
   """
@@ -163,6 +164,12 @@ class LanguageIdentifier(object):
     """
     Create a LanguageIdentifier from a model string.
     
+    Data flow:
+    1. Decode base64 string -> compressed bytes
+    2. Decompress bytes -> pickle data
+    3. Unpickle data -> 5 model variables (List[float], List[float], List[str], array.array, Dict)
+    4. Convert lists to numpy arrays -> (np.ndarray, np.ndarray, List[str], array.array, Dict)
+    
     @param string the model string (base64 encoded and compressed)
     @param args additional arguments to pass to the constructor
     @param kwargs additional keyword arguments to pass to the constructor
@@ -171,17 +178,49 @@ class LanguageIdentifier(object):
     b = base64.b64decode(string)
     z = bz2.decompress(b)
     model = loads(z)
-    nb_ptc, nb_pc, nb_classes, tk_nextmove, tk_output = model
-    nb_numfeats = int(len(nb_ptc) / len(nb_pc))
+    
+    # Type hints for the 5 model variables from pickle:
+    # nb_ptc_list: List[float] - Probability table for features given classes (flattened)
+    #   Shape: [7480 * 97] = 725,560 elements (7480 features × 97 languages)
+    #   Range: -17.31 to -0.90 (log probabilities, all negative)
+    # nb_pc_list: List[float] - Prior probabilities for each class  
+    #   Shape: [97] = 97 elements (one per language)
+    #   Range: 1.95 to 9.06 (log probabilities, all positive)
+    # nb_classes: List[str] - List of language codes (e.g., ['en', 'fr', 'de'])
+    #   Shape: [97] = 97 elements (one per language)
+    #   Format: 2-letter ISO codes (e.g., 'en', 'fr', 'de')
+    # tk_nextmove: array.array - Tokenizer state transitions (array of unsigned shorts, typecode 'H')
+    #   Shape: [2,334,208] = 2,334,208 elements (state transition table)
+    #   Range: 0 to 9,117 (state indices, 29% zeros)
+    # tk_output: Dict[int, Tuple] - Tokenizer output mappings (state -> output tuple)
+    #   Shape: 8,656 entries (state -> output mapping)
+    #   Keys: 0 to 9,117 (state indices)
+    #   Values: Empty tuples () or small tuples of uint16
+    nb_ptc_list: List[float]
+    nb_pc_list: List[float] 
+    nb_classes: List[str]
+    tk_nextmove: array.array
+    tk_output: Dict[int, Tuple]
+    nb_ptc_list, nb_pc_list, nb_classes, tk_nextmove, tk_output = model
+    
+    nb_numfeats = int(len(nb_ptc_list) / len(nb_pc_list))
 
-    # reconstruct pc and ptc
-    nb_pc = np.array(nb_pc)
-    nb_ptc = np.array(nb_ptc).reshape(nb_numfeats, len(nb_pc))
+    # Convert lists to numpy arrays
+    nb_pc = np.array(nb_pc_list)  # Shape: [97] -> (97,)
+    nb_ptc = np.array(nb_ptc_list).reshape(nb_numfeats, len(nb_pc))  # Shape: [725,560] -> (7480, 97)
+    
+    # Go Storage Recommendations:
+    # - nb_ptc: [][]float32 (7480×97 matrix, range -17.31 to -0.90)
+    # - nb_pc: []float32 (97 vector, range 1.95 to 9.06)
+    # - nb_classes: []string (97 codes, 2-letter ISO format)
+    # - tk_nextmove: []uint16 (2,334,208 elements, range 0-9,117, 29% zeros)
+    # - tk_output: map[uint32][]uint16 (8,656 entries, keys 0-9,117)
+    # Total optimized size: ~7.2MB (vs 10.0MB with float64)
    
     return cls(nb_ptc, nb_pc, nb_numfeats, nb_classes, tk_nextmove, tk_output, *args, **kwargs)
 
   @classmethod
-  def from_modelpath(cls, path: str, *args: Any, **kwargs: Any) -> 'LanguageIdentifier' | None:
+  def from_modelpath(cls, path: str, *args: Any, **kwargs: Any) -> Optional['LanguageIdentifier']:
     """
     Create a LanguageIdentifier from a model file.
     
@@ -194,8 +233,30 @@ class LanguageIdentifier(object):
       return cls.from_modelstring(f.read().encode(), *args, **kwargs)
 
   def __init__(self, nb_ptc: np.ndarray, nb_pc: np.ndarray, nb_numfeats: int, 
-               nb_classes: List[str], tk_nextmove: Dict[int, int], tk_output: Dict[int, List[int]],
+               nb_classes: List[str], tk_nextmove: array.array, tk_output: Dict[int, Tuple],
                norm_probs: bool = NORM_PROBS) -> None:
+    """
+    Initialize LanguageIdentifier with model data.
+    
+    @param nb_ptc: numpy.ndarray - Probability table for features given classes (reshaped)
+      Shape: (7480, 97) - 7480 features × 97 languages
+      Range: -17.31 to -0.90 (log probabilities, all negative)
+    @param nb_pc: numpy.ndarray - Prior probabilities for each class
+      Shape: (97,) - 97 languages
+      Range: 1.95 to 9.06 (log probabilities, all positive)
+    @param nb_numfeats: int - Number of features (7480)
+    @param nb_classes: List[str] - List of language codes
+      Shape: [97] - 97 languages
+      Format: 2-letter ISO codes (e.g., 'en', 'fr', 'de')
+    @param tk_nextmove: array.array - Tokenizer state transitions (typecode 'H')
+      Shape: [2,334,208] - state transition table
+      Range: 0 to 9,117 (state indices, 29% zeros)
+    @param tk_output: Dict[int, Tuple] - Tokenizer output mappings
+      Shape: 8,656 entries - state -> output mapping
+      Keys: 0 to 9,117 (state indices)
+      Values: Empty tuples () or small tuples of uint16
+    @param norm_probs: bool - Whether to normalize probabilities
+    """
     self.nb_ptc = nb_ptc
     self.nb_pc = nb_pc
     self.nb_numfeats = nb_numfeats
@@ -270,16 +331,9 @@ class LanguageIdentifier(object):
     @param text the text to convert to feature vector
     @return feature vector as numpy array
     """
-    if (sys.version_info > (3, 0)):
-      # Python3
-      if isinstance(text,str):
-        text = text.encode('utf8')
-    else:
-      # Python2
-      if isinstance(text,unicode):
-        text = text.encode('utf8')
-      # Convert the text to a sequence of ascii values
-      text = map(ord, text)
+    # Python3
+    if isinstance(text,str):
+      text = text.encode('utf8')
 
     arr = np.zeros((self.nb_numfeats,), dtype='uint32')
 

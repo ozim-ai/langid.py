@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -27,8 +28,8 @@ var (
 	}
 
 	// nb_classes.json - Language codes (97 codes)
-	embeddedNbClasses = []byte{
-		{{range .NbClasses}}{{.}},{{end}}
+	embeddedNbClasses = []string{
+		{{range .NbClasses}}"{{.}}",{{end}}
 	}
 
 	// tk_nextmove.bin - Tokenizer state transitions (2,334,208 elements)
@@ -46,7 +47,7 @@ var (
 type ModelData struct {
 	NbPtc      []byte
 	NbPc       []byte
-	NbClasses  []byte
+	NbClasses  []string
 	TkNextmove []byte
 	TkOutput   []byte
 }
@@ -82,7 +83,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error reading nb_classes.json: %v\n", err)
 		os.Exit(1)
 	}
-	modelData.NbClasses = nbClassesData
+	var nbClasses []string
+	err = json.Unmarshal(nbClassesData, &nbClasses)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error unmarshalling nb_classes.json: %v\n", err)
+		os.Exit(1)
+	}
+	modelData.NbClasses = nbClasses
 
 	// Read tk_nextmove.bin
 	tkNextmoveData, err := ioutil.ReadFile(filepath.Join(dataDir, "tk_nextmove.bin"))

@@ -4,7 +4,6 @@ package langid
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -241,10 +240,8 @@ func (li *LanguageIdentifier) loadEmbeddedModel() error {
 		return fmt.Errorf("failed to load embedded nb_pc: %w", err)
 	}
 
-	// Load nb_classes from embedded data
-	if err := li.loadNbClassesFromBytes(embeddedNbClasses); err != nil {
-		return fmt.Errorf("failed to load embedded nb_classes: %w", err)
-	}
+	// Load nb_classes from embedded data (direct string slice)
+	li.nbClasses = embeddedNbClasses
 
 	// Load tk_nextmove from embedded data
 	if err := li.loadTkNextmoveFromBytes(embeddedTkNextmove); err != nil {
@@ -387,9 +384,12 @@ func (li *LanguageIdentifier) loadNbPcFromBytes(data []byte) error {
 	return nil
 }
 
-// loadNbClassesFromBytes loads the language codes from byte data
+// loadNbClassesFromBytes loads the language codes from embedded string slice
 func (li *LanguageIdentifier) loadNbClassesFromBytes(data []byte) error {
-	return json.Unmarshal(data, &li.nbClasses)
+	// For embedded model, we use the pre-generated string slice directly
+	// This function is kept for compatibility but not used with embedded model
+	li.nbClasses = embeddedNbClasses
+	return nil
 }
 
 // loadTkNextmoveFromBytes loads the tokenizer state transitions from byte data

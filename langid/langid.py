@@ -32,9 +32,10 @@ authors and should not be interpreted as representing official policies, either 
 or implied, of the copyright holder.
 """
 from __future__ import print_function
+from typing import List, Tuple, Optional, Union, Dict, Any, Callable
 try:
   # if running on Python2, mask input() with raw_input()
-  input = raw_input
+  input = raw_input  # type: ignore
 except NameError:
   pass
 
@@ -78,20 +79,22 @@ QlpoOTFBWSZTWRcOrWEAUJJfgGAQAMN/4AEACAApBFAgYrArPvbgSFAUAggISl20UoDQ1RECEoRSKE61
 # Convenience methods defined below will initialize this when first called.
 identifier = None
 
-def set_languages(langs=None):
+def set_languages(langs: Optional[List[str]] = None) -> 'LanguageIdentifier':
   """
   Set the language set used by the global identifier.
 
   @param langs a list of language codes
+  @return the language identifier instance
   """
   global identifier
   if identifier is None:
     load_model()
-
+    if identifier is None:
+      raise RuntimeError("Failed to load model")
   return identifier.set_languages(langs)
 
 
-def classify(instance):
+def classify(instance: str) -> Tuple[str, float]:
   """
   Convenience method using a global identifier instance with the default
   model included in langid.py. Identifies the language that a string is 
@@ -103,10 +106,11 @@ def classify(instance):
   global identifier
   if identifier is None:
     load_model()
-
+    if identifier is None:
+      raise RuntimeError("Failed to load model")
   return identifier.classify(instance)
 
-def rank(instance):
+def rank(instance: str) -> List[Tuple[str, float]]:
   """
   Convenience method using a global identifier instance with the default
   model included in langid.py. Ranks all the languages in the model according
@@ -118,7 +122,8 @@ def rank(instance):
   global identifier
   if identifier is None:
     load_model()
-
+    if identifier is None:
+      raise RuntimeError("Failed to load model")
   return identifier.rank(instance)
   
 def cl_path(path):
@@ -151,12 +156,11 @@ def rank_path(path):
 
   return identifier.rank_path(path)
 
-def load_model(path = None):
+def load_model(path: Optional[str] = None) -> None:
   """
-  Convenience method to set the global identifier using a model at a
-  specified path.
-
-  @param path to model
+  Load a model from a file or use the default model.
+  
+  @param path path to the model file, or None to use the default model
   """
   global identifier
   logger.info('initializing identifier')
@@ -171,7 +175,15 @@ class LanguageIdentifier(object):
   """
 
   @classmethod
-  def from_modelstring(cls, string, *args, **kwargs):
+  def from_modelstring(cls, string: Union[str, bytes], *args: Any, **kwargs: Any) -> 'LanguageIdentifier':
+    """
+    Create a LanguageIdentifier from a model string.
+    
+    @param string the model string (base64 encoded and compressed)
+    @param args additional arguments to pass to the constructor
+    @param kwargs additional keyword arguments to pass to the constructor
+    @return a new LanguageIdentifier instance
+    """
     b = base64.b64decode(string)
     z = bz2.decompress(b)
     model = loads(z)
@@ -185,12 +197,21 @@ class LanguageIdentifier(object):
     return cls(nb_ptc, nb_pc, nb_numfeats, nb_classes, tk_nextmove, tk_output, *args, **kwargs)
 
   @classmethod
-  def from_modelpath(cls, path, *args, **kwargs):
+  def from_modelpath(cls, path: str, *args: Any, **kwargs: Any) -> 'LanguageIdentifier':
+    """
+    Create a LanguageIdentifier from a model file.
+    
+    @param path path to the model file
+    @param args additional arguments to pass to the constructor
+    @param kwargs additional keyword arguments to pass to the constructor
+    @return a new LanguageIdentifier instance
+    """
     with open(path) as f:
       return cls.from_modelstring(f.read().encode(), *args, **kwargs)
 
-  def __init__(self, nb_ptc, nb_pc, nb_numfeats, nb_classes, tk_nextmove, tk_output,
-               norm_probs = NORM_PROBS):
+  def __init__(self, nb_ptc: np.ndarray, nb_pc: np.ndarray, nb_numfeats: int, 
+               nb_classes: List[str], tk_nextmove: Dict[int, int], tk_output: Dict[int, List[int]],
+               norm_probs: bool = NORM_PROBS) -> None:
     self.nb_ptc = nb_ptc
     self.nb_pc = nb_pc
     self.nb_numfeats = nb_numfeats
@@ -225,7 +246,13 @@ class LanguageIdentifier(object):
     # multiple times.
     self.__full_model = nb_ptc, nb_pc, nb_classes
 
-  def set_languages(self, langs=None):
+  def set_languages(self, langs: Optional[List[str]] = None) -> 'LanguageIdentifier':
+    """
+    Set the languages to classify between.
+    
+    @param langs list of language codes to restrict to, or None for all languages
+    @return self for method chaining
+    """
     logger.debug("restricting languages to: %s", langs)
 
     # Unpack the full original model. This is needed in case the language set
@@ -249,10 +276,15 @@ class LanguageIdentifier(object):
       self.nb_classes = [ c for c in nb_classes if c in langs ]
       self.nb_ptc = nb_ptc[:,subset_mask]
       self.nb_pc = nb_pc[subset_mask]
+    
+    return self
 
-  def instance2fv(self, text):
+  def instance2fv(self, text: str) -> np.ndarray:
     """
     Map an instance into the feature space of the trained model.
+    
+    @param text the text to convert to feature vector
+    @return feature vector as numpy array
     """
     if (sys.version_info > (3, 0)):
       # Python3
@@ -281,31 +313,52 @@ class LanguageIdentifier(object):
 
     return arr
 
-  def nb_classprobs(self, fv):
+  def nb_classprobs(self, fv: np.ndarray) -> np.ndarray:
+    """
+    Compute class probabilities for a feature vector.
+    
+    @param fv feature vector
+    @return array of class probabilities
+    """
     # compute the partial log-probability of the document given each class
     pdc = np.dot(fv,self.nb_ptc)
     # compute the partial log-probability of the document in each class
     pd = pdc + self.nb_pc
     return pd
 
-  def classify(self, text):
+  def classify(self, text: str) -> Tuple[str, float]:
     """
     Classify an instance.
+    
+    @param text the text to classify
+    @return tuple of (language_code, confidence_score)
     """
     fv = self.instance2fv(text)
-    probs = self.norm_probs(self.nb_classprobs(fv))
+    probs = self.norm_probs(self.nb_classprobs(fv))  # type: ignore
     cl = np.argmax(probs)
     conf = float(probs[cl])
     pred = str(self.nb_classes[cl])
     return pred, conf
 
-  def rank(self, text):
+  def rank(self, text: str) -> List[Tuple[str, float]]:
     """
-    Return a list of languages in order of likelihood.
+    Rank all languages by probability for the given text.
+    
+    @param text the text to classify
+    @return list of (language_code, confidence_score) tuples, sorted by confidence
     """
     fv = self.instance2fv(text)
-    probs = self.norm_probs(self.nb_classprobs(fv))
-    return [(str(k),float(v)) for (v,k) in sorted(zip(probs, self.nb_classes), reverse=True)]
+    probs = self.norm_probs(self.nb_classprobs(fv))  # type: ignore
+    
+    # Create list of (language, probability) tuples
+    lang_probs = [(self.nb_classes[i], float(probs[i])) for i in range(len(self.nb_classes))]
+    
+    # Sort by probability in descending order
+    lang_probs.sort(key=lambda x: x[1], reverse=True)
+    
+    return lang_probs
+
+
 
   def cl_path(self, path):
     """
